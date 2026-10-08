@@ -3,7 +3,7 @@
  * Plugin Name: MailFlash
  * Plugin URI:  https://mailflash.es
  * Description: Send all WordPress email through the MailFlash transactional API.
- * Version:     1.0.0
+ * Version:     1.1.0
  * Requires at least: 5.7
  * Requires PHP: 8.0
  * Author:      MailFlash
@@ -18,7 +18,7 @@ if (! defined('ABSPATH')) {
 
 define('MAILFLASH_API_URL', 'https://mailflash.es');
 define('MAILFLASH_API_TIMEOUT', 30);
-define('MAILFLASH_VERSION', '1.0.0');
+define('MAILFLASH_VERSION', '1.1.0');
 
 define('MAILFLASH_OPT_API_KEY', 'mailflash_api_key');
 define('MAILFLASH_OPT_FROM_EMAIL', 'mailflash_from_email');
@@ -28,6 +28,7 @@ define('MAILFLASH_OPT_TRACK_CLICKS', 'mailflash_track_clicks');
 
 register_activation_hook(__FILE__, 'mailflash_activate');
 register_deactivation_hook(__FILE__, 'mailflash_deactivate');
+register_uninstall_hook(__FILE__, 'mailflash_uninstall');
 
 add_action('admin_menu', 'mailflash_register_settings_page');
 add_action('admin_init', 'mailflash_register_settings');
@@ -53,6 +54,22 @@ function mailflash_activate(): void
 function mailflash_deactivate(): void
 {
     // Intentionally empty — settings persist across deactivate/reactivate.
+}
+
+/**
+ * Remove plugin options when the plugin is deleted (not on deactivation).
+ */
+function mailflash_uninstall(): void
+{
+    foreach ([
+        MAILFLASH_OPT_API_KEY,
+        MAILFLASH_OPT_FROM_EMAIL,
+        MAILFLASH_OPT_FROM_NAME,
+        MAILFLASH_OPT_TRACK_OPENS,
+        MAILFLASH_OPT_TRACK_CLICKS,
+    ] as $option) {
+        delete_option($option);
+    }
 }
 
 /**
@@ -172,9 +189,9 @@ function mailflash_register_settings(): void
     );
 }
 
-function mailflash_sanitize_api_key(string $value): string
+function mailflash_sanitize_api_key(mixed $value): string
 {
-    return sanitize_text_field(trim($value));
+    return is_string($value) ? sanitize_text_field(trim($value)) : '';
 }
 
 function mailflash_sanitize_checkbox(mixed $value): string
@@ -274,9 +291,9 @@ function mailflash_render_settings_page(): void
         return;
     }
 
-    $test_result = get_transient('mailflash_test_result');
+    $test_result = get_transient(mailflash_test_result_key());
     if (is_array($test_result)) {
-        delete_transient('mailflash_test_result');
+        delete_transient(mailflash_test_result_key());
     }
     ?>
     <div class="wrap">
@@ -328,6 +345,28 @@ function mailflash_render_settings_page(): void
 }
 
 /**
+ * Transient key for the current user's test-send result.
+ */
+function mailflash_test_result_key(): string
+{
+    return 'mailflash_test_result_' . get_current_user_id();
+}
+
+/**
+ * Store the test-send result and redirect back so a refresh does not resend.
+ */
+function mailflash_finish_test_send(bool $success, string $message): void
+{
+    set_transient(mailflash_test_result_key(), [
+        'success' => $success,
+        'message' => $message,
+    ], 30);
+
+    wp_safe_redirect(admin_url('options-general.php?page=mailflash'));
+    exit;
+}
+
+/**
  * Handle the test-send form submission.
  */
 function mailflash_handle_test_send(): void
@@ -352,12 +391,7 @@ function mailflash_handle_test_send(): void
         : '';
 
     if ($to === '') {
-        set_transient('mailflash_test_result', [
-            'success' => false,
-            'message' => __('Please enter a valid recipient email address.', 'mailflash'),
-        ], 30);
-
-        return;
+        mailflash_finish_test_send(false, __('Please enter a valid recipient email address.', 'mailflash'));
     }
 
     $payload = mailflash_build_payload([
@@ -375,30 +409,17 @@ function mailflash_handle_test_send(): void
         'attachments' => [],
     ]);
 
-    if ($payload === null) {
-        set_transient('mailflash_test_result', [
-            'success' => false,
-            'message' => __('Configure your API key and from email before sending a test.', 'mailflash'),
-        ], 30);
-
-        return;
+    if ($payload === null || ! mailflash_is_configured()) {
+        mailflash_finish_test_send(false, __('Configure your API key and from email before sending a test.', 'mailflash'));
     }
 
     $result = mailflash_api_send($payload);
 
     if (mailflash_api_accepted($result)) {
-        set_transient('mailflash_test_result', [
-            'success' => true,
-            'message' => __('Test email accepted by MailFlash and queued for delivery.', 'mailflash'),
-        ], 30);
-
-        return;
+        mailflash_finish_test_send(true, __('Test email accepted by MailFlash and queued for delivery.', 'mailflash'));
     }
 
-    set_transient('mailflash_test_result', [
-        'success' => false,
-        'message' => mailflash_format_error($result),
-    ], 30);
+    mailflash_finish_test_send(false, mailflash_format_error($result));
 }
 
 /**
@@ -442,31 +463,101 @@ function mailflash_admin_notices(): void
  */
 function mailflash_pre_wp_mail($short_circuit, array $atts)
 {
-    if (! mailflash_is_configured()) {
-        return null;
+    // Another plugin already handled (or blocked) this email.
+    if ($short_circuit !== null) {
+        return $short_circuit;
     }
 
-    if (! empty($atts['attachments'])) {
-        error_log('[MailFlash] Attachments are not supported in v1.0 — email sent without attachments.');
+    if (! mailflash_is_configured()) {
+        return null;
     }
 
     $payload = mailflash_build_payload($atts);
 
     if ($payload === null) {
-        error_log('[MailFlash] Could not build payload — missing from address or recipients.');
+        return mailflash_mail_failed(
+            __('Could not build payload — missing from address or recipients.', 'mailflash'),
+            $atts
+        );
+    }
 
-        return false;
+    $attachments = mailflash_build_attachments($atts['attachments'] ?? []);
+
+    if ($attachments !== []) {
+        // Sent for forward compatibility; the API does not deliver attachments yet.
+        error_log('[MailFlash] Attachments are not delivered by the MailFlash API yet — email sent without them.');
+        $payload['attachments'] = $attachments;
     }
 
     $result = mailflash_api_send($payload);
 
     if (mailflash_api_accepted($result)) {
+        // Same hook core wp_mail() fires, so mail-logging plugins keep working.
+        do_action('wp_mail_succeeded', $atts);
+
         return true;
     }
 
-    error_log('[MailFlash] Send failed: ' . mailflash_format_error($result));
+    return mailflash_mail_failed(mailflash_format_error($result), $atts);
+}
+
+/**
+ * Log a failure and fire core's wp_mail_failed action, like wp_mail() does.
+ *
+ * @param array<string, mixed> $atts
+ */
+function mailflash_mail_failed(string $message, array $atts): bool
+{
+    error_log('[MailFlash] Send failed: ' . $message);
+    do_action('wp_mail_failed', new WP_Error('wp_mail_failed', $message, $atts));
 
     return false;
+}
+
+/**
+ * Read wp_mail() attachments into MailFlash's base64 format.
+ *
+ * Accepts a newline-separated string or an array of paths; string keys are used
+ * as the attachment file name (WordPress 6.2+ behaviour). Unreadable files are
+ * skipped and logged, as core wp_mail() does.
+ *
+ * @param string|array<int|string, string> $attachments
+ * @return list<array{filename: string, content: string, content_type: string}>
+ */
+function mailflash_build_attachments($attachments)
+{
+    if (! is_array($attachments)) {
+        $attachments = explode("\n", str_replace("\r\n", "\n", (string) $attachments));
+    }
+
+    $out = [];
+
+    foreach ($attachments as $name => $path) {
+        $path = trim((string) $path);
+
+        if ($path === '') {
+            continue;
+        }
+
+        $content = is_file($path) && is_readable($path) ? file_get_contents($path) : false;
+
+        if ($content === false) {
+            error_log('[MailFlash] Skipping unreadable attachment: ' . $path);
+
+            continue;
+        }
+
+        $filename = is_string($name) && $name !== '' ? $name : wp_basename($path);
+        $filetype = wp_check_filetype($filename);
+
+        $out[] = [
+            'filename' => $filename,
+            'content' => base64_encode($content),
+            'content_type' => $filetype['type'] ?: 'application/octet-stream',
+        ];
+    }
+
+    return $out;
 }
 
 /**
@@ -502,7 +593,8 @@ function mailflash_build_payload(array $atts): ?array
         return null;
     }
 
-    $content_type = $parsed_headers['content_type'] ?? 'text/plain';
+    // Core applies this filter too; many plugins set HTML only through it.
+    $content_type = (string) apply_filters('wp_mail_content_type', $parsed_headers['content_type'] ?? 'text/plain');
     $is_html = stripos($content_type, 'text/html') !== false;
     $message = (string) ($atts['message'] ?? '');
 
@@ -534,13 +626,9 @@ function mailflash_build_payload(array $atts): ?array
         $payload['reply_to'] = $parsed_headers['reply_to'];
     }
 
-    if (get_option(MAILFLASH_OPT_TRACK_OPENS, '0') === '1') {
-        $payload['track_opens'] = true;
-    }
-
-    if (get_option(MAILFLASH_OPT_TRACK_CLICKS, '0') === '1') {
-        $payload['track_clicks'] = true;
-    }
+    // Always explicit: the settings checkboxes override the project defaults.
+    $payload['track_opens'] = get_option(MAILFLASH_OPT_TRACK_OPENS, '0') === '1';
+    $payload['track_clicks'] = get_option(MAILFLASH_OPT_TRACK_CLICKS, '0') === '1';
 
     return mailflash_filter_payload($payload);
 }
@@ -600,7 +688,9 @@ function mailflash_parse_headers($headers): array
 }
 
 /**
- * Split a comma-separated address list.
+ * Split a comma-separated address list, dropping entries without a valid email.
+ *
+ * Entries keep their original form ("Name <email>" or plain email).
  *
  * @return array<int, string>
  */
@@ -617,7 +707,7 @@ function mailflash_split_address_list(string $value): array
         $email = mailflash_extract_email($part);
 
         if ($email !== '') {
-            $emails[] = $email;
+            $emails[] = $part;
         }
     }
 
@@ -638,6 +728,18 @@ function mailflash_extract_email(string $value): string
     $email = sanitize_email(trim($value));
 
     return is_email($email) ? $email : '';
+}
+
+/**
+ * Extract the display name from "Name <email@example.com>", or '' if none.
+ */
+function mailflash_extract_name(string $value): string
+{
+    if (! preg_match('/^(.*?)<[^>]+>/', $value, $matches)) {
+        return '';
+    }
+
+    return sanitize_text_field(trim($matches[1], " \t\"'"));
 }
 
 /**
@@ -662,9 +764,18 @@ function mailflash_normalize_recipients($recipients): array
         if (is_string($recipient)) {
             $email = mailflash_extract_email($recipient);
 
-            if ($email !== '') {
-                $out[] = ['email' => $email];
+            if ($email === '') {
+                continue;
             }
+
+            $entry = ['email' => $email];
+            $name = mailflash_extract_name($recipient);
+
+            if ($name !== '') {
+                $entry['name'] = $name;
+            }
+
+            $out[] = $entry;
 
             continue;
         }
@@ -715,25 +826,6 @@ function mailflash_filter_payload(array $payload): array
  */
 function mailflash_api_send(array $payload): array
 {
-    if (! function_exists('curl_init')) {
-        return [
-            'status' => 0,
-            'body' => [
-                'error' => 'transport',
-                'message' => 'PHP cURL extension is required.',
-            ],
-        ];
-    }
-
-    $api_key = get_option(MAILFLASH_OPT_API_KEY, '');
-    $url = rtrim(MAILFLASH_API_URL, '/') . '/api/v1/email/send';
-
-    $headers = [
-        'Content-Type: application/json',
-        'Accept: application/json',
-        'X-API-Key: ' . $api_key,
-    ];
-
     $body = wp_json_encode($payload);
 
     if ($body === false) {
@@ -746,45 +838,37 @@ function mailflash_api_send(array $payload): array
         ];
     }
 
-    $ch = curl_init($url);
+    // WordPress HTTP API: honours proxy settings and works without ext-curl.
+    $response = wp_remote_post(
+        rtrim(MAILFLASH_API_URL, '/') . '/api/v1/email/send',
+        [
+            'timeout' => MAILFLASH_API_TIMEOUT,
+            'headers' => [
+                'Content-Type' => 'application/json',
+                'Accept' => 'application/json',
+                'X-API-Key' => (string) get_option(MAILFLASH_OPT_API_KEY, ''),
+                'User-Agent' => 'MailFlash-WordPress/' . MAILFLASH_VERSION,
+            ],
+            'body' => $body,
+            'data_format' => 'body',
+        ]
+    );
 
-    if ($ch === false) {
+    if (is_wp_error($response)) {
         return [
             'status' => 0,
             'body' => [
                 'error' => 'transport',
-                'message' => 'Failed to initialize cURL.',
+                'message' => $response->get_error_message(),
             ],
         ];
     }
 
-    curl_setopt_array($ch, [
-        CURLOPT_POST => true,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT => MAILFLASH_API_TIMEOUT,
-        CURLOPT_HTTPHEADER => $headers,
-        CURLOPT_POSTFIELDS => $body,
-    ]);
-
-    $raw = curl_exec($ch);
-    $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $error = curl_error($ch);
-    curl_close($ch);
-
-    if ($raw === false) {
-        return [
-            'status' => 0,
-            'body' => [
-                'error' => 'transport',
-                'message' => $error !== '' ? $error : 'Unknown cURL error.',
-            ],
-        ];
-    }
-
+    $raw = wp_remote_retrieve_body($response);
     $decoded = json_decode($raw, true);
 
     return [
-        'status' => $status,
+        'status' => (int) wp_remote_retrieve_response_code($response),
         'body' => is_array($decoded) ? $decoded : $raw,
     ];
 }

@@ -14,7 +14,7 @@ Each SDK is a **single file** — no build step, no package manager required. Co
 | Node.js 18+ | [`node/`](./node/) | nothing (native `fetch`) |
 | PHP 8.1+ | [`php/`](./php/) | `ext-curl` (standard) |
 | Laravel 10+ | [`laravel/`](./laravel/) | mail driver + API client — see [`laravel/README.md`](./laravel/README.md) |
-| WordPress 5.7+ | [`wordpress/`](./wordpress/) | PHP 8.0+, `ext-curl` |
+| WordPress 5.7+ | [`wordpress/`](./wordpress/) | PHP 8.0+ |
 
 ---
 
@@ -98,8 +98,8 @@ Mail::to($user)->send(new WelcomeMail());
 **API client** (direct `$mailflash->send([...])` calls):
 
 ```php
-// Copy laravel/client/MailFlashClient.php — see laravel/client/README.md
-app(\MailFlash\Client\MailFlashClient::class)->send([
+// Copy laravel/client/MailFlashClient.php to app/Services/MailFlash/ — see laravel/client/README.md
+app(\App\Services\MailFlash\MailFlashClient::class)->send([
     'from'    => 'hello@yourdomain.com',
     'to'      => ['you@example.com'],
     'subject' => 'Order confirmed',
@@ -136,6 +136,23 @@ Pass an `idempotency_key` (Python / PHP) or `idempotencyKey` (Node) to safely re
 
 ---
 
+## Other endpoints
+
+The Python, Node, PHP and Laravel API clients also wrap the read-only endpoints:
+
+| Endpoint | Python | Node | PHP / Laravel |
+|---|---|---|---|
+| `GET /api/v1/stats` | `get_stats()` | `getStats()` | `getStats()` |
+| `GET /api/v1/emails` | `list_emails()` | `listEmails()` | `listEmails()` |
+| `GET /api/v1/emails/{id}` | `get_email()` | `getEmail()` | `getEmail()` |
+| `GET /api/v1/emails/{id}/events` | `get_email_events()` | `getEmailEvents()` | `getEmailEvents()` |
+| `GET /api/v1/contacts` | `list_contacts()` | `listContacts()` | `listContacts()` |
+| `GET /api/v1/domains` | `list_domains()` | `listDomains()` | `listDomains()` |
+
+Every method returns the same `{status, body}` shape as `send()`. Use `ok(result)` to check for any 2xx.
+
+---
+
 ## Send payload reference
 
 | Field | Type | Required | Notes |
@@ -149,8 +166,8 @@ Pass an `idempotency_key` (Python / PHP) or `idempotencyKey` (Node) to safely re
 | `reply_to` | string | | |
 | `html` | string | | HTML body (one of `html` or `text` required) |
 | `text` | string | | Plain-text body |
-| `headers` | object | | Extra SMTP headers |
-| `attachments` | array | | `{filename, content (base64), content_type?}` |
+| `headers` | object | | Custom headers (stored with the email) |
+| `attachments` | array | | `{filename, content (base64), content_type?}` — **accepted but not delivered yet** |
 | `tags` | array | | String tags for filtering in the dashboard |
 | `track_opens` | bool | | Default: project setting |
 | `track_clicks` | bool | | Default: project setting |

@@ -2,7 +2,7 @@
 
 Send all WordPress email (`wp_mail()`) through the [MailFlash](https://mailflash.es) transactional API — password resets, WooCommerce orders, contact forms, and everything else.
 
-The plugin is a **single PHP file** with a built-in settings page. No Composer, no dependencies beyond PHP cURL.
+The plugin is a **single PHP file** with a built-in settings page. No Composer, no extra dependencies — it uses the WordPress HTTP API.
 
 ---
 
@@ -12,7 +12,6 @@ The plugin is a **single PHP file** with a built-in settings page. No Composer, 
 |---|---|
 | WordPress | 5.7+ |
 | PHP | 8.0+ |
-| PHP extension | `curl` |
 | MailFlash account | Project with verified sending domain |
 
 ---
@@ -70,12 +69,19 @@ If the API key is not configured, WordPress falls back to its default mail trans
 |---|---|
 | `to` | `to` |
 | `subject` | `subject` |
-| `message` | `html` or `text` (based on `Content-Type` header) |
+| `message` | `html` or `text` (based on the `Content-Type` header and the `wp_mail_content_type` filter) |
 | `Cc` / `Bcc` / `Reply-To` headers | `cc` / `bcc` / `reply_to` |
+| `attachments` | `attachments` (base64) — **not delivered yet**, see below |
 | Settings: From email / name | `from` / `from_name` |
 | Settings: tracking checkboxes | `track_opens` / `track_clicks` |
 
-**Attachments** are not supported in v1.0. Emails with attachments are still sent, but without the attachment files (a notice is written to the PHP error log).
+Display names in `"Name <email>"` recipients are kept.
+
+**Attachments:** the plugin sends them to MailFlash, but the MailFlash API does not deliver attachments yet — the email arrives without them, and a notice is written to the PHP error log. Unreadable attachment files are skipped, as core `wp_mail()` does.
+
+The plugin fires WordPress's standard `wp_mail_succeeded` and `wp_mail_failed` actions, so mail-logging plugins keep working. If another plugin has already short-circuited `wp_mail()` via `pre_wp_mail`, MailFlash leaves its result alone.
+
+**Tracking checkboxes** always override your project's defaults: unchecked means tracking is off for WordPress emails, even if the project default is on.
 
 ---
 
@@ -116,15 +122,15 @@ tail -f /var/log/php-fpm/error.log
 tail -f /var/log/apache2/error.log
 ```
 
-### cURL not available
+### Test email fails with "cURL error 28" / timeout
 
-The plugin requires PHP’s cURL extension. Contact your host or enable `extension=curl` in `php.ini`.
+Your host is blocking or slowing outbound HTTPS to `mailflash.es`. Ask your host to allow outbound connections on port 443.
 
 ---
 
 ## Uninstall
 
-Deactivate the plugin under **Plugins**. Settings are kept in the WordPress options table so you can reactivate without re-entering credentials. To remove settings entirely, delete the `mailflash_*` options from `wp_options` or use a cleanup plugin.
+**Deactivating** the plugin keeps its settings, so you can reactivate without re-entering credentials. **Deleting** it from the Plugins screen also removes all `mailflash_*` options.
 
 ---
 

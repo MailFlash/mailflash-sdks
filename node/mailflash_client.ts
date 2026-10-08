@@ -97,11 +97,7 @@ export class MailFlashClient {
     }
 
     async send(payload: SendEmailPayload, options: SendOptions = {}): Promise<ApiResult> {
-        const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-            'X-API-Key': this.apiKey,
-        };
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (options.idempotencyKey) {
             headers['Idempotency-Key'] = options.idempotencyKey;
         }
@@ -157,11 +153,11 @@ export class MailFlashClient {
     async getEmail(id: string, options: { includeBody?: boolean; signal?: AbortSignal } = {}): Promise<ApiResult> {
         const query = options.includeBody ? '?include=body' : '';
 
-        return this.request('GET', `/emails/${id}${query}`, { signal: options.signal });
+        return this.request('GET', `/emails/${encodeURIComponent(id)}${query}`, { signal: options.signal });
     }
 
     async getEmailEvents(id: string, signal?: AbortSignal): Promise<ApiResult> {
-        return this.request('GET', `/emails/${id}/events`, { signal });
+        return this.request('GET', `/emails/${encodeURIComponent(id)}/events`, { signal });
     }
 
     accepted(result: ApiResult): boolean {
@@ -177,9 +173,15 @@ export class MailFlashClient {
         path: string,
         options: { body?: Record<string, unknown>; headers?: Record<string, string>; signal?: AbortSignal } = {},
     ): Promise<ApiResult> {
+        // The timeout always applies; a caller's signal can abort earlier.
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
-        const signal = options.signal ?? controller.signal;
+        const timeout = setTimeout(() => controller.abort(new Error(`Request timed out after ${this.timeoutMs} ms`)), this.timeoutMs);
+        const onCallerAbort = () => controller.abort(options.signal?.reason);
+        if (options.signal?.aborted) {
+            onCallerAbort();
+        } else {
+            options.signal?.addEventListener('abort', onCallerAbort, { once: true });
+        }
 
         const headers: Record<string, string> = {
             Accept: 'application/json',
@@ -192,7 +194,7 @@ export class MailFlashClient {
                 method,
                 headers,
                 body: options.body ? JSON.stringify(options.body) : undefined,
-                signal,
+                signal: controller.signal,
             });
 
             const text = await response.text();
@@ -205,10 +207,12 @@ export class MailFlashClient {
 
             return { status: response.status, body: parsed };
         } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
+            const reason = controller.signal.aborted ? controller.signal.reason : err;
+            const message = reason instanceof Error ? reason.message : String(reason ?? err);
             return { status: 0, body: { error: 'transport', message } };
         } finally {
             clearTimeout(timeout);
+            options.signal?.removeEventListener('abort', onCallerAbort);
         }
     }
 }
@@ -217,7 +221,10 @@ export class MailFlashClient {
 export type SendResult = ApiResult;
 
 export function normalizeRecipients(recipients: Recipient[]): { email: string; name?: string }[] {
-    return recipients.map((r) => (typeof r === 'string' ? { email: r } : r));
+    return recipients.map((r) => {
+        if (typeof r === 'string') return { email: r };
+        return r.name ? { email: r.email, name: r.name } : { email: r.email };
+    });
 }
 
 function normalizePayload(payload: SendEmailPayload): Record<string, unknown> {

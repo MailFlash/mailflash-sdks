@@ -72,6 +72,8 @@ $result = $client->send([
 
 ### Attachments (base64-encoded)
 
+> **Not delivered yet.** The MailFlash API accepts the `attachments` field but does not deliver attachments yet — the email is sent without them. Don't rely on attachments until they are announced in the MailFlash release notes.
+
 ```php
 $result = $client->send([
     'from'    => 'billing@yourdomain.com',
@@ -107,8 +109,25 @@ $result = $client->send([
 
 Returns `['status' => int, 'body' => array|string]`.
 
-A `status` of `202` means accepted. `status=0` means a curl/transport error.
+A `status` of `202` means accepted. `status=0` means a transport error (`body.error` is `transport`) or a payload that could not be JSON-encoded (`body.error` is `encode`, e.g. invalid UTF-8).
 
 ### `accepted(array $result): bool`
 
 Returns `true` if `$result['status'] === 202`.
+
+### `ok(array $result): bool`
+
+Returns `true` for any 2xx status.
+
+### Read endpoints
+
+All return `['status' => int, 'body' => array|string]`.
+
+```php
+$client->getStats('2026-06-01', '2026-06-30');
+$client->listEmails(['status' => 'delivered', 'tag' => 'orders', 'page' => 2]);
+$client->getEmail('uuid-here', includeBody: true);
+$client->getEmailEvents('uuid-here');
+$client->listContacts(['status' => 'suppressed']);
+$client->listDomains(verifiedOnly: true);
+```
