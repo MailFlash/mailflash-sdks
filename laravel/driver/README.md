@@ -11,8 +11,7 @@ Set `MAIL_MAILER=mailflash` and use Laravel's normal mail API — `Mail::to()`, 
 ## Requirements
 
 - PHP 8.1+
-- Laravel 10 or 11
-- PHP extension: `ext-curl`
+- Laravel 10+ (uses Laravel's HTTP client, which ships with the default Laravel install)
 
 ---
 
@@ -41,7 +40,7 @@ Keep the `App\Mail\MailFlash` namespace as-is.
 
 ### 2. Register the service provider
 
-**Laravel 11** — add to `bootstrap/providers.php`:
+**Laravel 11+** — add to `bootstrap/providers.php`:
 
 ```php
 return [
@@ -90,7 +89,9 @@ MAIL_FROM_NAME="Your App"
 MAILFLASH_API_KEY=your_project_key_here
 ```
 
-The **from address** must be on a domain verified in your MailFlash project (SPF/DKIM/DMARC). MailFlash always connects to `https://mailflash.es` — there is no API URL setting.
+The **from address** must be on a domain verified in your MailFlash project (SPF/DKIM/DMARC).
+
+The driver connects to `https://mailflash.es` by default. To point it elsewhere (e.g. staging), add `'url' => env('MAILFLASH_URL', 'https://mailflash.es')` to `services.mailflash` and set `MAILFLASH_URL` — the same key the [API client](../client/) uses.
 
 Get your API key from the MailFlash dashboard under **Projects → API key**.
 
@@ -119,7 +120,9 @@ Mail::raw('Your password reset link is ...', function ($message) use ($user) {
 
 ### With attachments
 
-Attachments from Mailables and `$message->attach()` are sent to MailFlash as base64-encoded files.
+> **Not delivered yet.** The MailFlash API accepts the `attachments` field but does not deliver attachments yet — the email is sent without them. Don't rely on attachments until they are announced in the MailFlash release notes.
+
+Attachments from Mailables and `$message->attach()` are sent to MailFlash as base64-encoded files, so they will start arriving once the API delivers them.
 
 ```php
 Mail::send('emails.invoice', ['invoice' => $invoice], function ($message) use ($invoice) {
@@ -149,6 +152,20 @@ Mail::fake();
 Mail::assertSent(OrderConfirmed::class);
 ```
 
+To test the transport itself (the actual API payload), fake the HTTP layer instead — the driver uses Laravel's HTTP client:
+
+```php
+use Illuminate\Support\Facades\Http;
+
+Http::fake([
+    'mailflash.es/*' => Http::response(['id' => 'test-uuid', 'status' => 'queued'], 202),
+]);
+
+Mail::to('you@example.com')->send(new OrderConfirmed($order));
+
+Http::assertSent(fn ($request) => $request['subject'] === 'Order confirmed');
+```
+
 ---
 
 ## Tracking
@@ -166,8 +183,12 @@ Open and click tracking follow your **project defaults** in the MailFlash dashbo
 | Subject | `subject` |
 | HTML body | `html` |
 | Text body | `text` |
-| Reply-To | `reply_to` |
-| Attachments | `attachments` (base64) |
+| Reply-To (first address) | `reply_to` |
+| Attachments | `attachments` (base64) — not delivered yet |
+| Mailable tags (`Envelope(tags: [...])`, `->tag()`) | `tags` |
+| Custom headers (`X-*`, `List-Unsubscribe`, Mailable metadata as `X-Metadata-*`) | `headers` (stored with the email) |
+
+Inline/embedded images (`$message->embed()`, `cid:` references) don't work, because the API does not deliver attachments yet. Link images by absolute URL instead.
 
 ---
 

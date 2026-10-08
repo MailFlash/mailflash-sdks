@@ -20,6 +20,7 @@ final class MailFlashServiceProvider extends ServiceProvider
         Mail::extend('mailflash', function (array $config = []) {
             return new MailFlashTransport(
                 (string) config('services.mailflash.key', ''),
+                (string) config('services.mailflash.url', 'https://mailflash.es'),
             );
         });
     }

@@ -41,47 +41,129 @@ final class MailFlashClient
      */
     public function send(array $payload, ?string $idempotencyKey = null): array
     {
-        $body = $this->normalizePayload($payload);
-
-        $headers = [
-            'Content-Type: application/json',
-            'Accept: application/json',
-            'X-API-Key: '.$this->apiKey,
-        ];
+        $headers = [];
         if ($idempotencyKey !== null && $idempotencyKey !== '') {
             $headers[] = 'Idempotency-Key: '.$idempotencyKey;
         }
 
-        $url = rtrim($this->baseUrl, '/').'/api/v1/email/send';
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_POST => true,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => $this->timeoutSeconds,
-            CURLOPT_HTTPHEADER => $headers,
-            CURLOPT_POSTFIELDS => json_encode($body, JSON_THROW_ON_ERROR),
-        ]);
+        return $this->request('POST', '/email/send', [], $this->normalizePayload($payload), $headers);
+    }
 
-        $raw = curl_exec($ch);
-        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $error = curl_error($ch);
-        curl_close($ch);
+    /**
+     * @return array{status: int, body: array<string, mixed>|string}
+     */
+    public function getStats(?string $dateFrom = null, ?string $dateTo = null): array
+    {
+        return $this->request('GET', '/stats', ['date_from' => $dateFrom, 'date_to' => $dateTo]);
+    }
 
-        if ($raw === false) {
-            return ['status' => 0, 'body' => ['error' => 'transport', 'message' => $error]];
-        }
+    /**
+     * @return array{status: int, body: array<string, mixed>|string}
+     */
+    public function listDomains(bool $verifiedOnly = false): array
+    {
+        return $this->request('GET', '/domains', ['verified_only' => $verifiedOnly ? '1' : null]);
+    }
 
-        $decoded = json_decode($raw, true);
+    /**
+     * @param  array{q?: string, status?: 'active'|'suppressed', page?: int}  $filters
+     * @return array{status: int, body: array<string, mixed>|string}
+     */
+    public function listContacts(array $filters = []): array
+    {
+        return $this->request('GET', '/contacts', $filters);
+    }
 
-        return [
-            'status' => $status,
-            'body' => is_array($decoded) ? $decoded : $raw,
-        ];
+    /**
+     * @param  array{status?: string, tag?: string, to?: string, from?: string, date_from?: string, date_to?: string, page?: int}  $filters
+     * @return array{status: int, body: array<string, mixed>|string}
+     */
+    public function listEmails(array $filters = []): array
+    {
+        return $this->request('GET', '/emails', $filters);
+    }
+
+    /**
+     * @return array{status: int, body: array<string, mixed>|string}
+     */
+    public function getEmail(string $id, bool $includeBody = false): array
+    {
+        return $this->request('GET', '/emails/'.rawurlencode($id), ['include' => $includeBody ? 'body' : null]);
+    }
+
+    /**
+     * @return array{status: int, body: array<string, mixed>|string}
+     */
+    public function getEmailEvents(string $id): array
+    {
+        return $this->request('GET', '/emails/'.rawurlencode($id).'/events');
     }
 
     public function accepted(array $result): bool
     {
         return ($result['status'] ?? 0) === 202;
+    }
+
+    public function ok(array $result): bool
+    {
+        $status = $result['status'] ?? 0;
+
+        return $status >= 200 && $status < 300;
+    }
+
+    /**
+     * @param  array<string, mixed>  $query
+     * @param  array<string, mixed>|null  $json
+     * @param  list<string>  $extraHeaders
+     * @return array{status: int, body: array<string, mixed>|string}
+     */
+    private function request(string $method, string $path, array $query = [], ?array $json = null, array $extraHeaders = []): array
+    {
+        $url = rtrim($this->baseUrl, '/').'/api/v1'.$path;
+        $query = array_filter($query, static fn (mixed $v): bool => $v !== null && $v !== '');
+        if ($query !== []) {
+            $url .= '?'.http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+        }
+
+        $headers = ['Accept: application/json', 'X-API-Key: '.$this->apiKey, ...$extraHeaders];
+        $options = [
+            CURLOPT_CUSTOMREQUEST => $method,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => min(10, $this->timeoutSeconds),
+            CURLOPT_TIMEOUT => $this->timeoutSeconds,
+        ];
+
+        if ($json !== null) {
+            try {
+                $options[CURLOPT_POSTFIELDS] = json_encode($json, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            } catch (\JsonException $e) {
+                return ['status' => 0, 'body' => ['error' => 'encode', 'message' => $e->getMessage()]];
+            }
+            $headers[] = 'Content-Type: application/json';
+        }
+        $options[CURLOPT_HTTPHEADER] = $headers;
+
+        $ch = curl_init($url);
+        if ($ch === false) {
+            return ['status' => 0, 'body' => ['error' => 'transport', 'message' => 'Failed to initialize cURL.']];
+        }
+        curl_setopt_array($ch, $options);
+
+        // No curl_close(): handles are freed automatically since PHP 8.0, and it is deprecated in 8.5.
+        $raw = curl_exec($ch);
+        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
+
+        if ($raw === false) {
+            return ['status' => 0, 'body' => ['error' => 'transport', 'message' => $error !== '' ? $error : 'Unknown cURL error.']];
+        }
+
+        $decoded = json_decode((string) $raw, true);
+
+        return [
+            'status' => $status,
+            'body' => is_array($decoded) ? $decoded : (string) $raw,
+        ];
     }
 
     /**

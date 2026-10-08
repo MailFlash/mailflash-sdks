@@ -24,7 +24,8 @@ Usage:
 
 from __future__ import annotations
 
-from typing import Any, TypedDict, NotRequired, Union
+from typing import Any, TypedDict, Union
+from urllib.parse import quote
 
 import requests
 
@@ -32,15 +33,32 @@ import requests
 Recipient = Union[str, dict[str, str]]
 
 
-class Attachment(TypedDict):
+class _AttachmentRequired(TypedDict):
     filename: str
     content: str
-    content_type: NotRequired[str]
+
+
+class Attachment(_AttachmentRequired, total=False):
+    # Optional keys live here: typing.NotRequired is Python 3.11+.
+    content_type: str
 
 
 class SendResult(TypedDict):
     status: int
     body: Any
+
+
+# Every method returns the same {status, body} shape.
+ApiResult = SendResult
+
+
+class MailFlashError(RuntimeError):
+    """Raised by raise_for_status(); carries the failed result."""
+
+    def __init__(self, result: ApiResult) -> None:
+        self.status: int = result.get("status", 0)
+        self.body: Any = result.get("body", "")
+        super().__init__(f"MailFlash request failed ({self.status}): {self.body}")
 
 
 def normalize_recipients(recipients: list[Recipient]) -> list[dict[str, str]]:
@@ -59,6 +77,10 @@ def normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
         if field in body and body[field]:
             body[field] = normalize_recipients(body[field])
     return {k: v for k, v in body.items() if v is not None and v != []}
+
+
+def _query(params: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in params.items() if v is not None and v != ""}
 
 
 class MailFlashClient:
@@ -80,20 +102,92 @@ class MailFlashClient:
         *,
         idempotency_key: str | None = None,
     ) -> SendResult:
-        url = f"{self.base_url}/api/v1/email/send"
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "X-API-Key": self.api_key,
-        }
+        headers = {"Content-Type": "application/json"}
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
 
+        return self._request("POST", "/email/send", json=normalize_payload(payload), headers=headers)
+
+    def get_stats(self, *, date_from: str | None = None, date_to: str | None = None) -> ApiResult:
+        return self._request("GET", "/stats", params=_query({"date_from": date_from, "date_to": date_to}))
+
+    def list_domains(self, *, verified_only: bool = False) -> ApiResult:
+        return self._request("GET", "/domains", params=_query({"verified_only": "1" if verified_only else None}))
+
+    def list_contacts(
+        self,
+        *,
+        q: str | None = None,
+        status: str | None = None,
+        page: int | None = None,
+    ) -> ApiResult:
+        return self._request("GET", "/contacts", params=_query({"q": q, "status": status, "page": page}))
+
+    def list_emails(
+        self,
+        *,
+        status: str | None = None,
+        tag: str | None = None,
+        to: str | None = None,
+        from_: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        page: int | None = None,
+    ) -> ApiResult:
+        params = _query({
+            "status": status,
+            "tag": tag,
+            "to": to,
+            "from": from_,
+            "date_from": date_from,
+            "date_to": date_to,
+            "page": page,
+        })
+        return self._request("GET", "/emails", params=params)
+
+    def get_email(self, email_id: str, *, include_body: bool = False) -> ApiResult:
+        params = {"include": "body"} if include_body else None
+        return self._request("GET", f"/emails/{quote(email_id, safe='')}", params=params)
+
+    def get_email_events(self, email_id: str) -> ApiResult:
+        return self._request("GET", f"/emails/{quote(email_id, safe='')}/events")
+
+    @staticmethod
+    def accepted(result: SendResult) -> bool:
+        return result.get("status") == 202
+
+    @staticmethod
+    def ok(result: ApiResult) -> bool:
+        return 200 <= result.get("status", 0) < 300
+
+    def raise_for_status(self, result: SendResult) -> SendResult:
+        """Return result if accepted (202), otherwise raise MailFlashError."""
+        if self.accepted(result):
+            return result
+        raise MailFlashError(result)
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> ApiResult:
+        all_headers = {
+            "Accept": "application/json",
+            "X-API-Key": self.api_key,
+            **(headers or {}),
+        }
+
         try:
-            response = self._session.post(
-                url,
-                json=normalize_payload(payload),
-                headers=headers,
+            response = self._session.request(
+                method,
+                f"{self.base_url}/api/v1{path}",
+                params=params or None,
+                json=json,
+                headers=all_headers,
                 timeout=self.timeout_seconds,
             )
         except requests.RequestException as exc:
@@ -105,14 +199,3 @@ class MailFlashClient:
             body = response.text
 
         return {"status": response.status_code, "body": body}
-
-    @staticmethod
-    def accepted(result: SendResult) -> bool:
-        return result.get("status") == 202
-
-    def raise_for_status(self, result: SendResult) -> SendResult:
-        if self.accepted(result):
-            return result
-        status = result.get("status", 0)
-        body = result.get("body", "")
-        raise RuntimeError(f"MailFlash request failed ({status}): {body}")

@@ -53,6 +53,8 @@ await client.send({
 
 ### Attachments
 
+> **Not delivered yet.** The MailFlash API accepts the `attachments` field but does not deliver attachments yet — the email is sent without them. Don't rely on attachments until they are announced in the MailFlash release notes.
+
 ```ts
 import { readFileSync } from 'fs';
 
@@ -77,6 +79,8 @@ setTimeout(() => controller.abort(), 5_000);
 
 const result = await client.send({ ... }, { signal: controller.signal });
 ```
+
+The client's own `timeoutMs` still applies when you pass a signal — whichever fires first aborts the request. Aborted or timed-out requests return `{ status: 0, body: { error: 'transport', message } }`.
 
 ### Other API methods
 

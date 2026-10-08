@@ -56,11 +56,17 @@ result = client.send({
 ### Raise on failure
 
 ```python
-result = client.send({...})
-client.raise_for_status(result)  # raises RuntimeError if not 202
+from mailflash_client import MailFlashError
+
+try:
+    client.raise_for_status(client.send({...}))
+except MailFlashError as e:  # subclass of RuntimeError
+    print(e.status, e.body)
 ```
 
 ### Attachments
+
+> **Not delivered yet.** The MailFlash API accepts the `attachments` field but does not deliver attachments yet — the email is sent without them. Don't rely on attachments until they are announced in the MailFlash release notes.
 
 ```python
 import base64
@@ -82,6 +88,22 @@ result = client.send({
     ],
 })
 ```
+
+### Other API methods
+
+```python
+stats = client.get_stats(date_from='2026-06-01')
+emails = client.list_emails(status='delivered', from_='hello@yourdomain.com', page=2)
+email = client.get_email('uuid-here', include_body=True)
+events = client.get_email_events('uuid-here')
+contacts = client.list_contacts(status='suppressed')
+domains = client.list_domains(verified_only=True)
+
+if client.ok(stats):  # any 2xx
+    print(stats['body'])
+```
+
+`from_` has a trailing underscore because `from` is a Python keyword.
 
 ### Reuse the session (recommended for high volume)
 
@@ -113,6 +135,10 @@ A `status` of `202` means the email was accepted. `status=0` means a network/tra
 
 Returns `True` if `result['status'] == 202`.
 
+### `client.ok(result) → bool`
+
+Returns `True` for any 2xx status.
+
 ### `client.raise_for_status(result) → SendResult`
 
-Returns `result` unchanged if accepted, otherwise raises `RuntimeError`.
+Returns `result` unchanged if accepted, otherwise raises `MailFlashError` (a `RuntimeError` subclass with `.status` and `.body`).

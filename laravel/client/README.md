@@ -21,6 +21,10 @@ Copy [`MailFlashClient.php`](./MailFlashClient.php) into your app:
 app/Services/MailFlash/MailFlashClient.php
 ```
 
+The class lives in the `App\Services\MailFlash` namespace, so Laravel's default `App\` PSR-4 autoloading picks it up from that path. If you put it elsewhere, change the namespace to match.
+
+> **Upgrading from v1?** The namespace changed from `MailFlash\Client` to `App\Services\MailFlash` — update your `use` statements and the singleton binding.
+
 ### 2. Add config
 
 In `config/services.php`:
@@ -44,7 +48,7 @@ MAILFLASH_API_KEY=your_project_key_here
 In `app/Providers/AppServiceProvider.php`:
 
 ```php
-use MailFlash\Client\MailFlashClient;
+use App\Services\MailFlash\MailFlashClient;
 
 public function register(): void
 {
@@ -62,7 +66,7 @@ public function register(): void
 ### Inject via constructor (recommended)
 
 ```php
-use MailFlash\Client\MailFlashClient;
+use App\Services\MailFlash\MailFlashClient;
 
 class OrderController extends Controller
 {
@@ -87,7 +91,7 @@ class OrderController extends Controller
 ### Resolve from the container
 
 ```php
-app(\MailFlash\Client\MailFlashClient::class)->send([...], 'order-1');
+app(\App\Services\MailFlash\MailFlashClient::class)->send([...], 'order-1');
 ```
 
 ### Named recipients
@@ -108,7 +112,9 @@ $result = $mailflash->send([
 
 ```php
 $result = $mailflash->send([...]);
-$mailflash->throwIfFailed($result); // throws Illuminate\Http\Client\RequestException on non-202
+$mailflash->throwIfFailed($result);
+// throws Illuminate\Http\Client\RequestException on any non-202 response,
+// or Illuminate\Http\Client\ConnectionException if MailFlash could not be reached
 ```
 
 ### Check manually
@@ -122,6 +128,19 @@ if ($mailflash->accepted($result)) {
     logger()->error('MailFlash error', ['status' => $result['status'], 'body' => $result['body']]);
 }
 ```
+
+### Read endpoints
+
+```php
+$mailflash->getStats('2026-06-01', '2026-06-30');
+$mailflash->listEmails(['status' => 'delivered', 'page' => 2]);
+$mailflash->getEmail($uuid, includeBody: true);
+$mailflash->getEmailEvents($uuid);
+$mailflash->listContacts(['status' => 'suppressed']);
+$mailflash->listDomains(verifiedOnly: true);
+```
+
+All return the same `['status', 'body', 'response']` array as `send()`. Use `ok($result)` to check for any 2xx.
 
 ### Faking in tests
 
@@ -144,12 +163,16 @@ $this->assertTrue($mailflash->accepted($result));
 
 ### `send(array $payload, ?string $idempotencyKey = null): array`
 
-Returns `['status' => int, 'body' => array|string, 'response' => Response]`.
+Returns `['status' => int, 'body' => array|string, 'response' => Response]`. On a transport error, `status` is `0` and there is no `response` key.
 
 ### `accepted(array $result): bool`
 
 Returns `true` if `$result['status'] === 202`.
 
+### `ok(array $result): bool`
+
+Returns `true` for any 2xx status.
+
 ### `throwIfFailed(array $result): array`
 
-Returns `$result` unchanged if accepted, otherwise throws `Illuminate\Http\Client\RequestException`.
+Returns `$result` unchanged if accepted. Otherwise throws `Illuminate\Http\Client\RequestException` (non-202 response) or `Illuminate\Http\Client\ConnectionException` (`status` 0, transport error).

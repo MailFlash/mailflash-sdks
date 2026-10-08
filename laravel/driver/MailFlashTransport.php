@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace App\Mail\MailFlash;
 
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Facades\Http;
 use Symfony\Component\Mailer\Exception\TransportException;
+use Symfony\Component\Mailer\Header\TagHeader;
 use Symfony\Component\Mailer\SentMessage;
 use Symfony\Component\Mailer\Transport\AbstractTransport;
 use Symfony\Component\Mime\Address;
@@ -20,12 +23,17 @@ use Symfony\Component\Mime\Part\DataPart;
  */
 final class MailFlashTransport extends AbstractTransport
 {
-    private const API_URL = 'https://mailflash.es/api/v1/email/send';
-
     private const TIMEOUT_SECONDS = 30;
+
+    /** Headers already mapped to payload fields, or set by MailFlash itself. */
+    private const RESERVED_HEADERS = [
+        'from', 'to', 'cc', 'bcc', 'subject', 'reply-to', 'sender', 'return-path',
+        'date', 'message-id', 'mime-version', 'content-type', 'content-transfer-encoding',
+    ];
 
     public function __construct(
         private readonly string $apiKey,
+        private readonly string $baseUrl = 'https://mailflash.es',
     ) {
         parent::__construct();
     }
@@ -54,7 +62,7 @@ final class MailFlashTransport extends AbstractTransport
 
     public function __toString(): string
     {
-        return 'mailflash://mailflash.es';
+        return 'mailflash://'.(parse_url($this->baseUrl, PHP_URL_HOST) ?: 'mailflash.es');
     }
 
     /**
@@ -120,6 +128,16 @@ final class MailFlashTransport extends AbstractTransport
             $payload['attachments'] = $attachments;
         }
 
+        [$headers, $tags] = $this->headersToPayload($email);
+
+        if ($headers !== []) {
+            $payload['headers'] = $headers;
+        }
+
+        if ($tags !== []) {
+            $payload['tags'] = $tags;
+        }
+
         return array_filter(
             $payload,
             static fn (mixed $value): bool => $value !== null && $value !== [],
@@ -149,6 +167,34 @@ final class MailFlashTransport extends AbstractTransport
         }
 
         return $out;
+    }
+
+    /**
+     * Mailable tags (Envelope tags / ->tag()) become MailFlash tags; other custom
+     * headers (e.g. X-*, List-Unsubscribe, Mailable metadata) are passed through.
+     *
+     * @return array{0: array<string, string>, 1: list<string>}
+     */
+    private function headersToPayload(Email $email): array
+    {
+        $headers = [];
+        $tags = [];
+
+        foreach ($email->getHeaders()->all() as $header) {
+            if ($header instanceof TagHeader) {
+                $tags[] = $header->getValue();
+
+                continue;
+            }
+
+            if (in_array(strtolower($header->getName()), self::RESERVED_HEADERS, true)) {
+                continue;
+            }
+
+            $headers[$header->getName()] = $header->getBodyAsString();
+        }
+
+        return [$headers, array_values(array_unique($tags))];
     }
 
     /**
@@ -192,25 +238,21 @@ final class MailFlashTransport extends AbstractTransport
      */
     private function sendPayload(array $payload): array
     {
-        if (! function_exists('curl_init')) {
+        try {
+            $response = Http::timeout(self::TIMEOUT_SECONDS)
+                ->acceptJson()
+                ->withHeaders(['X-API-Key' => $this->apiKey])
+                ->post(rtrim($this->baseUrl, '/').'/api/v1/email/send', $payload);
+        } catch (ConnectionException $e) {
             return [
                 'status' => 0,
                 'body' => [
                     'error' => 'transport',
-                    'message' => 'PHP cURL extension is required.',
+                    'message' => $e->getMessage(),
                 ],
             ];
-        }
-
-        $headers = [
-            'Content-Type: application/json',
-            'Accept: application/json',
-            'X-API-Key: '.$this->apiKey,
-        ];
-
-        try {
-            $body = json_encode($payload, JSON_THROW_ON_ERROR);
-        } catch (\JsonException $e) {
+        } catch (\InvalidArgumentException $e) {
+            // Guzzle throws this when the payload cannot be JSON-encoded (e.g. invalid UTF-8).
             return [
                 'status' => 0,
                 'body' => [
@@ -220,46 +262,11 @@ final class MailFlashTransport extends AbstractTransport
             ];
         }
 
-        $ch = curl_init(self::API_URL);
-
-        if ($ch === false) {
-            return [
-                'status' => 0,
-                'body' => [
-                    'error' => 'transport',
-                    'message' => 'Failed to initialize cURL.',
-                ],
-            ];
-        }
-
-        curl_setopt_array($ch, [
-            CURLOPT_POST => true,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => self::TIMEOUT_SECONDS,
-            CURLOPT_HTTPHEADER => $headers,
-            CURLOPT_POSTFIELDS => $body,
-        ]);
-
-        $raw = curl_exec($ch);
-        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $error = curl_error($ch);
-        curl_close($ch);
-
-        if ($raw === false) {
-            return [
-                'status' => 0,
-                'body' => [
-                    'error' => 'transport',
-                    'message' => $error !== '' ? $error : 'Unknown cURL error.',
-                ],
-            ];
-        }
-
-        $decoded = json_decode($raw, true);
+        $decoded = $response->json();
 
         return [
-            'status' => $status,
-            'body' => is_array($decoded) ? $decoded : $raw,
+            'status' => $response->status(),
+            'body' => is_array($decoded) ? $decoded : $response->body(),
         ];
     }
 
