@@ -166,8 +166,8 @@ Every method returns the same `{status, body}` shape as `send()`. Use `ok(result
 | `reply_to` | string | | |
 | `html` | string | | HTML body (one of `html` or `text` required) |
 | `text` | string | | Plain-text body |
-| `headers` | object | | Custom headers (stored with the email) |
-| `attachments` | array | | `{filename, content (base64), content_type?}` — **accepted but not delivered yet** |
+| `headers` | object | | Custom headers, e.g. `{"X-Campaign": "welcome"}`. Headers MailFlash sets itself (From, To, Subject, Message-ID, List-Unsubscribe…) can't be overridden |
+| `attachments` | array | | `{filename, content (base64), content_type?, content_id?, disposition?}` — max 10 files, 10 MB total. Set `content_id` (e.g. `logo@yourdomain.com`) for inline images referenced as `cid:` |
 | `tags` | array | | String tags for filtering in the dashboard |
 | `track_opens` | bool | | Default: project setting |
 | `track_clicks` | bool | | Default: project setting |

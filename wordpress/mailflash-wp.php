@@ -484,8 +484,6 @@ function mailflash_pre_wp_mail($short_circuit, array $atts)
     $attachments = mailflash_build_attachments($atts['attachments'] ?? []);
 
     if ($attachments !== []) {
-        // Sent for forward compatibility; the API does not deliver attachments yet.
-        error_log('[MailFlash] Attachments are not delivered by the MailFlash API yet — email sent without them.');
         $payload['attachments'] = $attachments;
     }
 

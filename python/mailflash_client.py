@@ -41,6 +41,10 @@ class _AttachmentRequired(TypedDict):
 class Attachment(_AttachmentRequired, total=False):
     # Optional keys live here: typing.NotRequired is Python 3.11+.
     content_type: str
+    # Inline images: content_id like "logo@example.com" (must contain @), referenced as cid:logo@example.com.
+    content_id: str
+    # "attachment" or "inline"; defaults to "inline" when content_id is set.
+    disposition: str
 
 
 class SendResult(TypedDict):

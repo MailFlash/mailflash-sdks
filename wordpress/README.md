@@ -71,13 +71,13 @@ If the API key is not configured, WordPress falls back to its default mail trans
 | `subject` | `subject` |
 | `message` | `html` or `text` (based on the `Content-Type` header and the `wp_mail_content_type` filter) |
 | `Cc` / `Bcc` / `Reply-To` headers | `cc` / `bcc` / `reply_to` |
-| `attachments` | `attachments` (base64) — **not delivered yet**, see below |
+| `attachments` | `attachments` (base64) — see below |
 | Settings: From email / name | `from` / `from_name` |
 | Settings: tracking checkboxes | `track_opens` / `track_clicks` |
 
 Display names in `"Name <email>"` recipients are kept.
 
-**Attachments:** the plugin sends them to MailFlash, but the MailFlash API does not deliver attachments yet — the email arrives without them, and a notice is written to the PHP error log. Unreadable attachment files are skipped, as core `wp_mail()` does.
+**Attachments:** sent to MailFlash as base64-encoded files (up to 10 files, 10 MB in total). Unreadable attachment files are skipped, as core `wp_mail()` does.
 
 The plugin fires WordPress's standard `wp_mail_succeeded` and `wp_mail_failed` actions, so mail-logging plugins keep working. If another plugin has already short-circuited `wp_mail()` via `pre_wp_mail`, MailFlash leaves its result alone.
 

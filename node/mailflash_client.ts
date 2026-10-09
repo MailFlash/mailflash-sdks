@@ -27,6 +27,10 @@ export type Attachment = {
     filename: string;
     content: string;
     content_type?: string;
+    /** Content-ID for inline images, e.g. 'logo@example.com' (must contain @); reference as cid:logo@example.com. */
+    content_id?: string;
+    /** Defaults to 'inline' when content_id is set, otherwise 'attachment'. */
+    disposition?: 'attachment' | 'inline';
 };
 
 export type SendEmailPayload = {

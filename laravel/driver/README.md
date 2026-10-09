@@ -120,9 +120,7 @@ Mail::raw('Your password reset link is ...', function ($message) use ($user) {
 
 ### With attachments
 
-> **Not delivered yet.** The MailFlash API accepts the `attachments` field but does not deliver attachments yet — the email is sent without them. Don't rely on attachments until they are announced in the MailFlash release notes.
-
-Attachments from Mailables and `$message->attach()` are sent to MailFlash as base64-encoded files, so they will start arriving once the API delivers them.
+Attachments from Mailables and `$message->attach()` are sent to MailFlash as base64-encoded files (up to 10 files, 10 MB in total).
 
 ```php
 Mail::send('emails.invoice', ['invoice' => $invoice], function ($message) use ($invoice) {
@@ -131,6 +129,10 @@ Mail::send('emails.invoice', ['invoice' => $invoice], function ($message) use ($
         ->attach(storage_path('invoices/'.$invoice->pdf_path));
 });
 ```
+
+### Inline images
+
+`$message->embed()` / `embedData()` work as usual — in Blade, `<img src="{{ $message->embed($pathToImage) }}">`. The driver sends each embedded image with its Content-ID and rewrites the `cid:` reference to match.
 
 ### Notifications
 
@@ -184,11 +186,9 @@ Open and click tracking follow your **project defaults** in the MailFlash dashbo
 | HTML body | `html` |
 | Text body | `text` |
 | Reply-To (first address) | `reply_to` |
-| Attachments | `attachments` (base64) — not delivered yet |
+| Attachments, embedded images | `attachments` (base64; embedded images carry `content_id` + `disposition: inline`) |
 | Mailable tags (`Envelope(tags: [...])`, `->tag()`) | `tags` |
-| Custom headers (`X-*`, `List-Unsubscribe`, Mailable metadata as `X-Metadata-*`) | `headers` (stored with the email) |
-
-Inline/embedded images (`$message->embed()`, `cid:` references) don't work, because the API does not deliver attachments yet. Link images by absolute URL instead.
+| Custom headers (`X-*`, `List-Unsubscribe`, Mailable metadata as `X-Metadata-*`) | `headers` (applied to the sent message; MailFlash keeps its own From, To, Subject, Message-ID and List-Unsubscribe) |
 
 ---
 
