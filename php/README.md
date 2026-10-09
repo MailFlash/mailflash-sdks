@@ -72,7 +72,7 @@ $result = $client->send([
 
 ### Attachments (base64-encoded)
 
-> **Not delivered yet.** The MailFlash API accepts the `attachments` field but does not deliver attachments yet — the email is sent without them. Don't rely on attachments until they are announced in the MailFlash release notes.
+Up to 10 files, 10 MB in total (decoded). For an inline image, set `content_id` (it must contain `@`, e.g. `logo@yourdomain.com`) and reference it from the HTML as `cid:logo@yourdomain.com`.
 
 ```php
 $result = $client->send([

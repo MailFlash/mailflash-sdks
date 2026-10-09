@@ -93,11 +93,13 @@ final class MailFlashTransport extends AbstractTransport
             $payload['from_name'] = $fromAddress->getName();
         }
 
+        [$attachments, $cidRewrites] = $this->attachmentsToPayload($email->getAttachments());
+
         $html = $email->getHtmlBody();
         $text = $email->getTextBody();
 
         if (is_string($html) && $html !== '') {
-            $payload['html'] = $html;
+            $payload['html'] = $this->rewriteCids($html, $cidRewrites);
         }
 
         if (is_string($text) && $text !== '') {
@@ -121,8 +123,6 @@ final class MailFlashTransport extends AbstractTransport
         if ($replyTo !== []) {
             $payload['reply_to'] = $replyTo[0]->getAddress();
         }
-
-        $attachments = $this->attachmentsToPayload($email->getAttachments());
 
         if ($attachments !== []) {
             $payload['attachments'] = $attachments;
@@ -198,12 +198,17 @@ final class MailFlashTransport extends AbstractTransport
     }
 
     /**
+     * Inline parts (`$message->embed()`, `embedData()`) are sent with a Content-ID.
+     * Laravel references them in HTML as `cid:<name>`; like Symfony does when it
+     * renders MIME, those references are rewritten to the part's real Content-ID.
+     *
      * @param  list<DataPart>  $attachments
-     * @return list<array{filename: string, content: string, content_type?: string}>
+     * @return array{0: list<array{filename: string, content: string, content_type?: string, content_id?: string, disposition?: string}>, 1: array<string, string>}
      */
     private function attachmentsToPayload(array $attachments): array
     {
         $out = [];
+        $cidRewrites = [];
 
         foreach ($attachments as $attachment) {
             if (! $attachment instanceof DataPart) {
@@ -226,10 +231,39 @@ final class MailFlashTransport extends AbstractTransport
                 $item['content_type'] = $contentType;
             }
 
+            if ($attachment->getDisposition() === 'inline') {
+                // getContentId() generates an RFC-valid id (with "@") when none was set.
+                $contentId = $attachment->getContentId();
+                $name = $attachment->getName() ?? $filename;
+
+                if ($name !== $contentId) {
+                    $cidRewrites[$name] = $contentId;
+                }
+
+                $item['content_id'] = $contentId;
+                $item['disposition'] = 'inline';
+            }
+
             $out[] = $item;
         }
 
-        return $out;
+        return [$out, $cidRewrites];
+    }
+
+    /**
+     * @param  array<string, string>  $cidRewrites  name => Content-ID
+     */
+    private function rewriteCids(string $html, array $cidRewrites): string
+    {
+        foreach ($cidRewrites as $name => $contentId) {
+            $html = (string) preg_replace_callback(
+                '/cid:'.preg_quote($name, '/').'(?=["\'\s>)])/',
+                static fn (): string => 'cid:'.$contentId,
+                $html,
+            );
+        }
+
+        return $html;
     }
 
     /**

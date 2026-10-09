@@ -56,7 +56,7 @@ final class MailFlashClient
      *     html?: string,
      *     text?: string,
      *     headers?: array<string, string>,
-     *     attachments?: list<array{filename: string, content: string, content_type?: string}>,
+     *     attachments?: list<array{filename: string, content: string, content_type?: string, content_id?: string, disposition?: 'attachment'|'inline'}>,
      *     tags?: list<string>,
      *     track_opens?: bool,
      *     track_clicks?: bool,
